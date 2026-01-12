@@ -6,13 +6,6 @@ from typing import Any, Dict, Optional
 
 import requests
 from dotenv import load_dotenv
-import time
-import uuid
-import threading
-from typing import Any, Dict, Optional
-
-import requests
-from dotenv import load_dotenv
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import JSONResponse
 # Load env explicitly (avoids dotenv auto-discovery issues)
