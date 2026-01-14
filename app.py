@@ -134,33 +134,13 @@ def telegram_poll_loop() -> None:
     except Exception as e:
         print("Telegram send failed:", e)
 
-   # while True:
-       # try:
-           # res = tg_api(
-                "getUpdates",
                 #params={"timeout": 10, "offset": TG_OFFSET["value"]},
             )
            # if not res.get("ok"):
-                time.sleep(2)
-                continue
 
-           # updates = res.get("result", [])
-           # for u in updates:
-               # TG_OFFSET["value"] = u["update_id"] + 1
-
-                if "callback_query" in u:
-                    handle_callback_query(u["callback_query"])
-
-        except Exception as e:
             # keep polling even if Telegram blips
-            print("poll error:", e)
-            time.sleep(2)
 
 
-@app.on_event("startup")
-def start_polling_thread():
-    t = threading.Thread(target=telegram_poll_loop, daemon=True)
-    t.start()
 
 
 @app.get("/health")
