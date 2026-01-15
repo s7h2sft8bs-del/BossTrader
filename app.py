@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Request, Depends, HTTPException
+from fastapi import FastAPI, Request, Depends, HTTPException, Body
 from typing import Optional
 from pydantic import BaseModel, EmailStr
 from sqlalchemy.orm import Session
