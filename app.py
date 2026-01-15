@@ -16,6 +16,7 @@ app = FastAPI()
 Base.metadata.create_all(bind=ENGINE)
 
 broker = ManualAdapter()
+“
 
 def get_user_by_api_key(db: Session, api_key: str):
     return db.query(User).filter(User.api_key == api_key).first()
