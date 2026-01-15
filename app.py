@@ -16,7 +16,6 @@ app = FastAPI()
 Base.metadata.create_all(bind=ENGINE)
 
 broker = ManualAdapter()
-“
 
 def get_user_by_api_key(db: Session, api_key: str):
     return db.query(User).filter(User.api_key == api_key).first()
@@ -136,7 +135,7 @@ async def tv_webhook(request: Request, db: Session = Depends(get_db)):
         side=str(side),
         timeframe=str(timeframe),
         reason=str(reason),
-        status="PENDING"
+        status="PENDING",
     )
     db.add(prop)
     db.commit()
