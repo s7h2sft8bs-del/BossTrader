@@ -46,14 +46,13 @@ class SetPaidUntilBody(BaseModel):
 @app.post("/admin/create-user")
 async def admin_create_user(body: CreateUserBody, db: Session = Depends(get_db)):
 
-    email = body.emailtg_chat_id = body.tg_chat_id# optional for now
-
-    if not email:
-        raise HTTPException(400, "email required")
-
-    existing = db.query(User).filter(User.email == email).first()
-    if existing:
-        return {"ok": True, "user_id": existing.id, "api_key": existing.api_key}
+   email = body.email
+   tg_chat_id = getattr(body, "tg_chat_id", None)
+   if not email:
+       raise HTTPException(status_code=400, detail="email required")  
+ existing = db.query(User).filter(User.email == email).first()
+ if existing:
+       return {"ok": True, "user_id": existing.id, "api_key": existing.api_key}
 
     api_key = new_api_key()
     user = User(
