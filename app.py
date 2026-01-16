@@ -4,7 +4,7 @@ import secrets
 from datetime import datetime
 from typing import Optional
 
-from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi import FastAPI, Body, Header, HTTPException, Request, Query
 from pydantic import BaseModel, Field
 
 from sqlalchemy import Boolean, Column, DateTime, Integer, String, create_engine
@@ -119,25 +119,25 @@ def admin_create_user(
         raise
     finally:
         db.close()
-@app.get("/health")
-def health():
-    return {"ok": True}
 @app.post("/tv-webhook")
 async def tv_webhook(
     request: Request,
-    body: TVWebhookBody,
+    secret: Optional[str] = Query(default=None),
     x_tv_secret: Optional[str] = Header(default=None),
+    body: Optional[TVWebhookBody] = Body(default=None),
 ):
-    provided = (x_tv_secret or body.secret or "").strip()
+    provided = (x_tv_secret or secret or (body.secret if body else "") or "").strip()
+
     if not TV_WEBHOOK_SECRET:
-        raise HTTPException(status_code=500, detail="Server missing TV_WEBHOOK_SECRET")
+        raise HTTPException(status_code=500, detail="TV_WEBHOOK_SECRET not set")
+
     if provided != TV_WEBHOOK_SECRET:
-        raise HTTPException(status_code=401, detail="Bad secret")
+        raise HTTPException(status_code=401, detail="Bad TV secret")
 
     raw = await request.body()
     return {
         "ok": True,
         "received_bytes": len(raw),
-        "symbol": body.symbol,
-        "action": body.action,
+        "symbol": (body.symbol if body else None),
+        "action": (body.action if body else None),
     }
