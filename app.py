@@ -15,8 +15,7 @@ from sqlalchemy.orm import declarative_base, sessionmaker
 # Config
 # -----------------------------
 DB_URL = os.getenv("DATABASE_URL", "sqlite:///./boss.db")
-TV_WEBHOOK_SECRET = os.getenv("TV_WEBHOOK_SECRET", "")
-
+TV_WEBHOOK_SECRET = "0114196610251992"
 # ✅ HARD-CODED ADMIN SECRET (you asked for this)
 ADMIN_SECRET = "0114196610251992"
 
