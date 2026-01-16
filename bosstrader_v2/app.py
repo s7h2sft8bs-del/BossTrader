@@ -1,70 +1,70 @@
-cd ~/BossTrader/bosstrader_v2
-> app.py
 import os
+import json
 import secrets
-import logging
-from datetime import datetime, timedelta, timezone
-from typing import Any, Optional
+from datetime import datetime
+from typing import Optional, Any, Dict
 
-from fastapi import FastAPI, Depends, HTTPException, Request
+import requests
+from fastapi import FastAPI, Depends, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, EmailStr
-
-from sqlalchemy import (
-    create_engine,
-    Column,
-    Integer,
-    String,
-    Boolean,
-    DateTime,
-    text,
-)
+from sqlalchemy import create_engine, Column, Integer, String, Boolean, DateTime, Text
 from sqlalchemy.orm import sessionmaker, declarative_base, Session
 
+# ----------------------------
+# Settings (ENV)
+# ----------------------------
+ADMIN_KEY = os.getenv("ADMIN_KEY", "")  # you MUST set this on Render
+TV_WEBHOOK_SECRET = os.getenv("TV_WEBHOOK_SECRET", "")
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 
-# ---------------------------
-# Settings
-# ---------------------------
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./app.db")
+DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
+if not DATABASE_URL:
+    # local fallback (Render filesystem is ephemeral; for production use a real DB later)
+    DATABASE_URL = "sqlite:///./data.db"
 
-# Optional: protect admin endpoints (recommended).
-# If ADMIN_KEY is set, you must send header: X-Admin-Key: <ADMIN_KEY>
-ADMIN_KEY = os.getenv("ADMIN_KEY", "").strip()
+# SQLite needs this flag
+connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
+engine = create_engine(DATABASE_URL, connect_args=connect_args, pool_pre_ping=True)
 
-# Optional: extra protection for TradingView webhook
-TV_WEBHOOK_SECRET = os.getenv("TV_WEBHOOK_SECRET", "").strip()
-
-# Logging
-logging.basicConfig(level=logging.INFO)
-log = logging.getLogger("bosstrader")
-
-
-# ---------------------------
-# Database
-# ---------------------------
-connect_args = {}
-if DATABASE_URL.startswith("sqlite"):
-    connect_args = {"check_same_thread": False}
-
-engine = create_engine(DATABASE_URL, pool_pre_ping=True, connect_args=connect_args)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
-
+# ----------------------------
+# DB Models
+# ----------------------------
 class User(Base):
     __tablename__ = "users"
-
     id = Column(Integer, primary_key=True, index=True)
-    email = Column(String, unique=True, index=True, nullable=False)
-    api_key = Column(String, unique=True, index=True, nullable=False)
-
+    email = Column(String(255), unique=True, index=True, nullable=False)
+    api_key = Column(String(255), unique=True, index=True, nullable=False)
     is_active = Column(Boolean, default=True, nullable=False)
-    plan = Column(String, default="basic", nullable=False)
-    paid_until = Column(DateTime(timezone=True), nullable=True)
+    paid_until = Column(DateTime, nullable=True)
+    plan = Column(String(50), default="basic", nullable=False)
+    tg_chat_id = Column(String(64), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
-    tg_chat_id = Column(String, nullable=True)
-    created_at = Column(DateTime(timezone=True), nullable=False, server_default=text("CURRENT_TIMESTAMP"))
+class AlertLog(Base):
+    __tablename__ = "alert_logs"
+    id = Column(Integer, primary_key=True, index=True)
+    received_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    payload = Column(Text, nullable=False)
 
+Base.metadata.create_all(bind=engine)
+
+# ----------------------------
+# App
+# ----------------------------
+app = FastAPI(title="BossTrader API", version="2.0")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 def get_db():
     db = SessionLocal()
@@ -73,104 +73,65 @@ def get_db():
     finally:
         db.close()
 
-
-def init_db():
-    Base.metadata.create_all(bind=engine)
-
-
 def new_api_key() -> str:
-    # 32+ chars, URL-safe
     return secrets.token_urlsafe(32)
 
-
-def now_utc() -> datetime:
-    return datetime.now(timezone.utc)
-
-
-def require_admin(request: Request):
-    # If ADMIN_KEY isn't set, admin endpoints are open (dev mode).
+def require_admin(x_admin_key: Optional[str]):
     if not ADMIN_KEY:
+        raise HTTPException(500, "ADMIN_KEY is not set on server (Render env var missing).")
+    if not x_admin_key or x_admin_key != ADMIN_KEY:
+        raise HTTPException(401, "Invalid admin key")
+
+def require_user(db: Session, x_api_key: Optional[str]) -> User:
+    if not x_api_key:
+        raise HTTPException(401, "Missing X-API-KEY header")
+    user = db.query(User).filter(User.api_key == x_api_key).first()
+    if not user:
+        raise HTTPException(401, "Invalid API key")
+    if not user.is_active:
+        raise HTTPException(403, "User inactive")
+    if user.paid_until and user.paid_until < datetime.utcnow():
+        raise HTTPException(402, "Subscription expired")
+    return user
+
+def telegram_send(text: str):
+    if not (TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID):
         return
-    got = request.headers.get("X-Admin-Key", "")
-    if got != ADMIN_KEY:
-        raise HTTPException(status_code=401, detail="Missing/invalid admin key")
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    requests.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": text}, timeout=15)
 
-
-def is_paid(user: User) -> bool:
-    if user.paid_until is None:
-        return False
-    return user.paid_until >= now_utc()
-
-
-# ---------------------------
-# FastAPI
-# ---------------------------
-app = FastAPI(title="BossTrader API")
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # tighten later
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-
-@app.on_event("startup")
-def on_startup():
-    init_db()
-    log.info("DB initialized")
-
-
-# ---------------------------
-# Models
-# ---------------------------
-class EmailBody(BaseModel):
+# ----------------------------
+# Schemas
+# ----------------------------
+class CreateUserBody(BaseModel):
     email: EmailStr
-
-
-class CreateUserBody(EmailBody):
     tg_chat_id: Optional[str] = None
 
+class TVWebhookBody(BaseModel):
+    # accept anything TradingView sends (we store + forward)
+    payload: Dict[str, Any]
 
-class SetPaidUntilBody(EmailBody):
-    days: int = 30
-
-
-class WebhookBody(BaseModel):
-    # TradingView can send any JSON; keep flexible
-    api_key: Optional[str] = None
-    secret: Optional[str] = None
-    payload: Optional[dict[str, Any]] = None
-
-    # Common fields people send
-    symbol: Optional[str] = None
-    side: Optional[str] = None
-    timeframe: Optional[str] = None
-    message: Optional[str] = None
-
-
-# ---------------------------
-# Health
-# ---------------------------
+# ----------------------------
+# Routes
+# ----------------------------
 @app.get("/health")
 def health():
-    return {"ok": True, "ts": now_utc().isoformat()}
+    return {"ok": True}
 
-
-# ---------------------------
-# Admin
-# ---------------------------
 @app.post("/admin/create-user")
-def admin_create_user(body: CreateUserBody, request: Request, db: Session = Depends(get_db)):
-    require_admin(request)
+def admin_create_user(
+    body: CreateUserBody,
+    db: Session = Depends(get_db),
+    x_admin_key: Optional[str] = Header(default=None, convert_underscores=False),
+):
+    require_admin(x_admin_key)
 
     email = body.email
     tg_chat_id = body.tg_chat_id
 
     existing = db.query(User).filter(User.email == email).first()
     if existing:
-        return {"ok": True, "user_id": existing.id, "api_key": existing.api_key}
+        return {"ok": True, "existing": True, "user_id": existing.id, "api_key": existing.api_key}
 
     api_key = new_api_key()
     user = User(
@@ -185,85 +146,44 @@ def admin_create_user(body: CreateUserBody, request: Request, db: Session = Depe
     db.commit()
     db.refresh(user)
 
-    return {"ok": True, "user_id": user.id, "api_key": api_key}
+    return {"ok": True, "existing": False, "user_id": user.id, "api_key": api_key}
 
-
-@app.post("/admin/set-paid-until")
-def admin_set_paid_until(body: SetPaidUntilBody, request: Request, db: Session = Depends(get_db)):
-    require_admin(request)
-
-    user = db.query(User).filter(User.email == body.email).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-
-    user.paid_until = now_utc() + timedelta(days=int(body.days))
-    db.add(user)
-    db.commit()
-    db.refresh(user)
-
-    return {"ok": True, "user_id": user.id, "paid_until": user.paid_until.isoformat()}
-
-
-@app.get("/admin/user")
-def admin_get_user(email: str, request: Request, db: Session = Depends(get_db)):
-    require_admin(request)
-
-    user = db.query(User).filter(User.email == email).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-
-    return {
-        "ok": True,
-        "user": {
-            "id": user.id,
-            "email": user.email,
-            "api_key": user.api_key,
-            "is_active": user.is_active,
-            "plan": user.plan,
-            "paid_until": user.paid_until.isoformat() if user.paid_until else None,
-            "tg_chat_id": user.tg_chat_id,
-        },
-    }
-
-
-# ---------------------------
-# TradingView Webhook
-# ---------------------------
 @app.post("/tv-webhook")
-async def tv_webhook(body: WebhookBody, request: Request, db: Session = Depends(get_db)):
-    # 1) Optional global secret check (recommended)
-    # TradingView alert can include {"secret":"..."} in JSON
-    if TV_WEBHOOK_SECRET:
-        if body.secret != TV_WEBHOOK_SECRET:
-            raise HTTPException(status_code=401, detail="Invalid webhook secret")
+async def tv_webhook(
+    body: TVWebhookBody,
+    request: Request,
+    db: Session = Depends(get_db),
+    x_tv_secret: Optional[str] = Header(default=None, convert_underscores=False),
+):
+    # Security: allow secret either via header or query param
+    secret_q = request.query_params.get("secret")
+    secret = x_tv_secret or secret_q
 
-    # 2) Identify user by api_key (header wins, fallback to body)
-    api_key = request.headers.get("X-Api-Key") or body.api_key
-    if not api_key:
-        raise HTTPException(status_code=400, detail="Missing api_key (use header X-Api-Key or JSON field api_key)")
+    if not TV_WEBHOOK_SECRET:
+        raise HTTPException(500, "TV_WEBHOOK_SECRET not set on server")
+    if not secret or secret != TV_WEBHOOK_SECRET:
+        raise HTTPException(401, "Invalid TV webhook secret")
 
-    user = db.query(User).filter(User.api_key == api_key).first()
-    if not user or not user.is_active:
-        raise HTTPException(status_code=401, detail="Invalid or inactive api_key")
+    # Log payload
+    payload_str = json.dumps(body.payload, ensure_ascii=False)
+    db.add(AlertLog(payload=payload_str))
+    db.commit()
 
-    # 3) Enforce paid gate (optional – you can relax this if you want)
-    if not is_paid(user):
-        raise HTTPException(status_code=402, detail="Payment required")
+    # Send to Telegram (simple)
+    telegram_send(f"📈 TradingView Alert:\n{payload_str}")
 
-    # 4) Accept the webhook
-    # Here is where we’ll later forward to Telegram / broker.
-    log.info(f"Webhook received user={user.email} symbol={body.symbol} side={body.side} tf={body.timeframe}")
+    return {"ok": True}
 
+@app.get("/me")
+def me(
+    db: Session = Depends(get_db),
+    x_api_key: Optional[str] = Header(default=None, convert_underscores=False),
+):
+    user = require_user(db, x_api_key)
     return {
         "ok": True,
-        "received": True,
-        "user": user.email,
-        "ts": now_utc().isoformat(),
-        "echo": {
-            "symbol": body.symbol,
-            "side": body.side,
-            "timeframe": body.timeframe,
-            "message": body.message,
-            "payload": body.payload,
-        },
+        "email": user.email,
+        "plan": user.plan,
+        "paid_until": user.paid_until.isoformat() if user.paid_until else None,
+        "is_active": user.is_active,
     }
