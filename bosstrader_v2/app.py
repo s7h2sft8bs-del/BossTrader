@@ -150,6 +150,26 @@ async def tv_webhook(
         raise HTTPException(status_code=500, detail="Server missing TV_WEBHOOK_SECRET")
     if provided != TV_WEBHOOK_SECRET:
         raise HTTPException(status_code=401, detail="Bad secret")
-
+print("✅ tv_webhook reached + secret passed")
+# ✅ secret OK, continue
+# --- TELEGRAM NOTIFY (BossTrader) ---
+    try:
+        token = os.getenv("TELEGRAM_BOT_TOKEN", "")
+        chat_id = os.getenv("TELEGRAM_CHAT_ID", "")
+        if token and chat_id:
+            msg = (
+                "BossTrader ALERT\n"
+                f"symbol: {getattr(body, 'symbol', '')}\n"
+                f"side: {getattr(body, 'side', '')}\n"
+                f"qty: {getattr(body, 'qty', '')}\n"
+                f"timeframe: {getattr(body, 'timeframe', '')}\n"
+                f"strategy: {getattr(body, 'strategy', '')}\n"
+                f"comment: {getattr(body, 'comment', '')}"
+            )
+            url = f"https://api.telegram.org/bot{token}/sendMessage"
+            requests.post(url, data={"chat_id": chat_id, "text": msg}, timeout=10)
+    except Exception as e:
+        print("Telegram send failed:", e)
+    # --- END TELEGRAM NOTIFY ---
     raw = await request.body()
     return {"ok": True, "received_bytes": len(raw), "symbol": body.symbol, "action": body.action}
