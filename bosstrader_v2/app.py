@@ -145,17 +145,19 @@ async def tv_webhook(
     body: TVWebhookBody,
     x_tv_secret: Optional[str] = Header(default=None, alias="x-tv-secret"),
 ):
+print("BOSS_DEBUG_WEBHOOK_V1")
     provided = (x_tv_secret or body.secret or "").strip()
     if not TV_WEBHOOK_SECRET:
         raise HTTPException(status_code=500, detail="Server missing TV_WEBHOOK_SECRET")
     if provided != TV_WEBHOOK_SECRET:
         raise HTTPException(status_code=401, detail="Bad secret")
-print("✅ tv_webhook reached + secret passed")
-# ✅ secret OK, continue
+print("tv_webhook reached + secret passed")
+print("TELEGRAM TOKEN SET?", bool(os.getenv("TELEGRAM_BOT_TOKEN", "")))
+print("TELEGRAM CHAT_ID:", os.getenv("TELEGRAM_CHAT_ID", ""))
 # --- TELEGRAM NOTIFY (BossTrader) ---
     try:
-        token = os.getenv("TELEGRAM_BOT_TOKEN", "")
-        chat_id = os.getenv("TELEGRAM_CHAT_ID", "")
+token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+chat_id = os.getenv("TELEGRAM_CHAT_ID", "").strip()
         if token and chat_id:
             msg = (
                 "BossTrader ALERT\n"
