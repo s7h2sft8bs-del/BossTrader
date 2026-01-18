@@ -1,6 +1,7 @@
 import os
 import re
 import secrets
+import logging
 from datetime import datetime
 from typing import Optional
 
@@ -11,7 +12,7 @@ from sqlalchemy import Boolean, Column, DateTime, Integer, String, create_engine
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import declarative_base, sessionmaker
 
-
+logger = logging.getLogger("uvicorn.error")
 # -----------------------------
 # Config
 # -----------------------------
@@ -145,9 +146,6 @@ async def tv_webhook(
     body: TVWebhookBody,
     x_tv_secret: Optional[str] = Header(default=None, alias="x-tv-secret"),
 ):
-    print("BOSS_DEBUG_WEBHOOK_V1")
-    print("BOSS_DEBUG_TOKEN_SET:", bool(os.getenv("TELEGRAM_BOT_TOKEN")))
-    print("BOSS_DEBUG_CHATID_SET:", bool(os.getenv("TELEGRAM_CHAT_ID")))
     provided = (x_tv_secret or body.secret or "").strip()
     if not TV_WEBHOOK_SECRET:
         raise HTTPException(status_code=500, detail="Server missing TV_WEBHOOK_SECRET")
